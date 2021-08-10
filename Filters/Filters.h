@@ -59,10 +59,16 @@ public:
 
     HRESULT FillBuffer(IMediaSample *pms);
     HRESULT DecideBufferSize(IMemAllocator *pIMemAlloc, ALLOCATOR_PROPERTIES *pProperties);
-    HRESULT CheckMediaType(const CMediaType *pMediaType);
-    HRESULT GetMediaType(int iPosition, CMediaType *pmt);
+    HRESULT GetMediaType(CMediaType *pmt);
     HRESULT SetMediaType(const CMediaType *pmt);
     HRESULT OnThreadCreate(void);
+    HRESULT OnThreadDestroy(void);
+
+    BOOL m_bStop;
+    int m_Width;
+    int m_Height;
+    int m_BPP;
+    BYTE* m_bmp;
     
 private:
     CVCam *m_pParent;
@@ -70,6 +76,8 @@ private:
     HBITMAP m_hLogoBmp;
     CCritSec m_cSharedState;
     IReferenceClock *m_pClock;
+
+    HANDLE m_hThread;
 
 };
 

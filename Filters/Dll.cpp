@@ -1,6 +1,6 @@
 //////////////////////////////////////////////////////////////////////////
 //  This file contains routines to register / Unregister the 
-//  Directshow filter 'Virtual Cam'
+//  Directshow filter 'Screen Cam'
 //  We do not use the inbuilt BaseClasses routines as we need to register as
 //  a capture source
 //////////////////////////////////////////////////////////////////////////
@@ -20,7 +20,7 @@ STDAPI AMovieSetupUnregisterServer( CLSID clsServer );
 
 // {8E14549A-DB61-4309-AFA1-3578E927E933}
 DEFINE_GUID(CLSID_VirtualCam,
-            0x8e14549a, 0xdb61, 0x4309, 0xaf, 0xa1, 0x35, 0x78, 0xe9, 0x27, 0xe9, 0x33);
+            0x8e14549a, 0xdb61, 0x4309, 0xaf, 0xa1, 0x35, 0x78, 0xe9, 0x27, 0xe9, 0x99);
 
 const AMOVIESETUP_MEDIATYPE AMSMediaTypesVCam = 
 { 
@@ -44,7 +44,7 @@ const AMOVIESETUP_PIN AMSPinVCam=
 const AMOVIESETUP_FILTER AMSFilterVCam =
 {
     &CLSID_VirtualCam,  // Filter CLSID
-    L"Virtual Cam",     // String name
+    L"Screen Cam",     // String name
     MERIT_DO_NOT_USE,      // Filter merit
     1,                     // Number pins
     &AMSPinVCam             // Pin details
@@ -53,7 +53,7 @@ const AMOVIESETUP_FILTER AMSFilterVCam =
 CFactoryTemplate g_Templates[] = 
 {
     {
-        L"Virtual Cam",
+        L"Screen Cam",
         &CLSID_VirtualCam,
         CVCam::CreateInstance,
         NULL,
@@ -80,7 +80,7 @@ STDAPI RegisterFilters( BOOL bRegister )
     hr = CoInitialize(0);
     if(bRegister)
     {
-        hr = AMovieSetupRegisterServer(CLSID_VirtualCam, L"Virtual Cam", achFileName, L"Both", L"InprocServer32");
+        hr = AMovieSetupRegisterServer(CLSID_VirtualCam, L"Screen Cam", achFileName, L"Both", L"InprocServer32");
     }
 
     if( SUCCEEDED(hr) )
@@ -97,7 +97,7 @@ STDAPI RegisterFilters( BOOL bRegister )
                 rf2.dwMerit = MERIT_DO_NOT_USE;
                 rf2.cPins = 1;
                 rf2.rgPins = &AMSPinVCam;
-                hr = fm->RegisterFilter(CLSID_VirtualCam, L"Virtual Cam", &pMoniker, &CLSID_VideoInputDeviceCategory, NULL, &rf2);
+                hr = fm->RegisterFilter(CLSID_VirtualCam, L"Screen Cam", &pMoniker, &CLSID_VideoInputDeviceCategory, NULL, &rf2);
             }
             else
             {

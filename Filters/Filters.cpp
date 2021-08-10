@@ -1,6 +1,7 @@
 #pragma warning(disable:4244)
 #pragma warning(disable:4711)
 
+#include <string>
 #include <streams.h>
 #include <stdio.h>
 #include <olectl.h>
@@ -18,13 +19,13 @@ CUnknown * WINAPI CVCam::CreateInstance(LPUNKNOWN lpunk, HRESULT *phr)
 }
 
 CVCam::CVCam(LPUNKNOWN lpunk, HRESULT *phr) : 
-    CSource(NAME("Virtual Cam"), lpunk, CLSID_VirtualCam)
+    CSource(NAME("Screen Cam"), lpunk, CLSID_VirtualCam)
 {
     ASSERT(phr);
     CAutoLock cAutoLock(&m_cStateLock);
     // Create the one and only output pin
     m_paStreams = (CSourceStream **) new CVCamStream*[1];
-    m_paStreams[0] = new CVCamStream(phr, this, L"Virtual Cam");
+    m_paStreams[0] = new CVCamStream(phr, this, L"Screen Cam");
 }
 
 HRESULT CVCam::QueryInterface(REFIID riid, void **ppv)
@@ -41,14 +42,18 @@ HRESULT CVCam::QueryInterface(REFIID riid, void **ppv)
 // all the stuff.
 //////////////////////////////////////////////////////////////////////////
 CVCamStream::CVCamStream(HRESULT *phr, CVCam *pParent, LPCWSTR pPinName) :
-    CSourceStream(NAME("Virtual Cam"),phr, pParent, pPinName), m_pParent(pParent)
+    CSourceStream(NAME("Screen Cam"),phr, pParent, pPinName), m_pParent(pParent)
 {
     // Set the default media type as 320x240x24@15
-    GetMediaType(4, &m_mt);
+    GetMediaType(&m_mt);
+    int bmpMemSize = m_Width * m_Height * m_BPP / 8;
+    m_bmp = new BYTE[bmpMemSize];
+    ZeroMemory(m_bmp, bmpMemSize);
 }
 
 CVCamStream::~CVCamStream()
 {
+    delete[] m_bmp;
 } 
 
 HRESULT CVCamStream::QueryInterface(REFIID riid, void **ppv)
@@ -86,8 +91,8 @@ HRESULT CVCamStream::FillBuffer(IMediaSample *pms)
     long lDataLen;
     pms->GetPointer(&pData);
     lDataLen = pms->GetSize();
-    for(int i = 0; i < lDataLen; ++i)
-        pData[i] = rand();
+    
+    memcpy(pData, m_bmp, lDataLen);
 
     return NOERROR;
 } // FillBuffer
@@ -112,30 +117,38 @@ HRESULT CVCamStream::SetMediaType(const CMediaType *pmt)
 }
 
 // See Directshow help topic for IAMStreamConfig for details on this method
-HRESULT CVCamStream::GetMediaType(int iPosition, CMediaType *pmt)
+HRESULT CVCamStream::GetMediaType(CMediaType *pmt)
 {
-    if(iPosition < 0) return E_INVALIDARG;
-    if(iPosition > 8) return VFW_S_NO_MORE_ITEMS;
+    POINT pt;
+    pt.x = 1;
+    pt.y = 1;
 
-    if(iPosition == 0) 
-    {
-        *pmt = m_mt;
-        return S_OK;
-    }
+    HMONITOR hMonitor = ::MonitorFromPoint(pt, NULL);
+
+    MONITORINFOEX mi;
+    mi.cbSize = sizeof(mi);
+    ::GetMonitorInfo(hMonitor, &mi);
+    std::wstring monitorName = mi.szDevice;
+
+    HDC hDC = ::CreateDC(monitorName.c_str(), monitorName.c_str(), NULL, NULL);
+
+    m_Width = ::GetSystemMetrics(SM_CXSCREEN);
+    m_Height = ::GetSystemMetrics(SM_CYSCREEN);
+    m_BPP = ::GetDeviceCaps(hDC, BITSPIXEL);
 
     DECLARE_PTR(VIDEOINFOHEADER, pvi, pmt->AllocFormatBuffer(sizeof(VIDEOINFOHEADER)));
     ZeroMemory(pvi, sizeof(VIDEOINFOHEADER));
 
-    pvi->bmiHeader.biCompression = BI_RGB;
-    pvi->bmiHeader.biBitCount    = 24;
-    pvi->bmiHeader.biSize       = sizeof(BITMAPINFOHEADER);
-    pvi->bmiHeader.biWidth      = 80 * iPosition;
-    pvi->bmiHeader.biHeight     = 60 * iPosition;
-    pvi->bmiHeader.biPlanes     = 1;
-    pvi->bmiHeader.biSizeImage  = GetBitmapSize(&pvi->bmiHeader);
+    pvi->bmiHeader.biCompression  = BI_RGB;
+    pvi->bmiHeader.biBitCount     = m_BPP;
+    pvi->bmiHeader.biSize         = sizeof(BITMAPINFOHEADER);
+    pvi->bmiHeader.biWidth        = m_Width;
+    pvi->bmiHeader.biHeight       = m_Height;
+    pvi->bmiHeader.biPlanes       = ::GetDeviceCaps(hDC, PLANES);
+    pvi->bmiHeader.biSizeImage    = GetBitmapSize(&pvi->bmiHeader);
     pvi->bmiHeader.biClrImportant = 0;
 
-    pvi->AvgTimePerFrame = 1000000;
+    pvi->AvgTimePerFrame = 333333;
 
     SetRectEmpty(&(pvi->rcSource)); // we want the whole image area rendered.
     SetRectEmpty(&(pvi->rcTarget)); // no particular destination rectangle
@@ -149,18 +162,14 @@ HRESULT CVCamStream::GetMediaType(int iPosition, CMediaType *pmt)
     pmt->SetSubtype(&SubTypeGUID);
     pmt->SetSampleSize(pvi->bmiHeader.biSizeImage);
     
+    if (hDC)
+    {
+        DeleteDC(hDC);
+    }
+
     return NOERROR;
 
 } // GetMediaType
-
-// This method is called to see if a given output format is supported
-HRESULT CVCamStream::CheckMediaType(const CMediaType *pMediaType)
-{
-    VIDEOINFOHEADER *pvi = (VIDEOINFOHEADER *)(pMediaType->Format());
-    if(*pMediaType != m_mt) 
-        return E_INVALIDARG;
-    return S_OK;
-} // CheckMediaType
 
 // This method is called after the pins are connected to allocate buffers to stream data
 HRESULT CVCamStream::DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIES *pProperties)
@@ -181,13 +190,143 @@ HRESULT CVCamStream::DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIE
     return NOERROR;
 } // DecideBufferSize
 
+void drawCursor(CURSORINFO* pci, HDC hMemDC)
+{
+    HICON      icon;
+    ICONINFO   ii;
+    POINT      win_pos = { 0, 0 };
+
+    if (!(pci->flags & CURSOR_SHOWING))
+        return;
+
+    icon = CopyIcon(pci->hCursor);
+    if (!icon)
+        return;
+
+    if (GetIconInfo(icon, &ii)) {
+        POINT pos;
+
+        pos.x = pci->ptScreenPos.x - (int)ii.xHotspot - win_pos.x;
+        pos.y = pci->ptScreenPos.y - (int)ii.yHotspot - win_pos.y;
+
+        DrawIconEx(hMemDC, pos.x, pos.y, icon, 0, 0, 0, NULL,
+            DI_NORMAL);
+
+        DeleteObject(ii.hbmColor);
+        DeleteObject(ii.hbmMask);
+    }
+
+    DestroyIcon(icon);
+}
+
+DWORD WINAPI CapThreadProc(LPVOID lpParam)
+{
+    CVCamStream* pStream = (CVCamStream*) lpParam;
+
+    POINT pt;
+    pt.x = 1;
+    pt.y = 1;
+
+    HMONITOR hMonitor = ::MonitorFromPoint(pt, NULL);
+
+    MONITORINFOEX mi;
+    mi.cbSize = sizeof(mi);
+    ::GetMonitorInfo(hMonitor, &mi);
+    std::wstring monitorName = mi.szDevice;
+
+    int imageSize = pStream->m_Width * pStream->m_Height * pStream->m_BPP / 8;
+    BITMAPINFO bi = { 0 };
+    BITMAPINFOHEADER* bih = &bi.bmiHeader;
+    bih->biSize = sizeof(BITMAPINFOHEADER);
+    bih->biBitCount = pStream->m_BPP;
+    bih->biWidth = pStream->m_Width;
+    bih->biHeight = pStream->m_Height;
+    bih->biSizeImage = imageSize;
+    bih->biPlanes = 1;
+    bih->biClrImportant = 0;
+    bih->biClrUsed = 0;
+    bih->biCompression = 0;
+    bih->biXPelsPerMeter = 0;
+    bih->biYPelsPerMeter = 0;
+
+    BYTE* bits;
+    CURSORINFO ci;
+    BOOL cursor_captured = FALSE;
+    //DWORD now = 0;
+
+    while(!pStream->m_bStop)
+    {
+        //now = GetTickCount();
+        HDC hDC = ::CreateDC(monitorName.c_str(), monitorName.c_str(), NULL, NULL);
+
+        HDC hMemDC = CreateCompatibleDC(hDC);
+        HBITMAP membmp = CreateDIBSection(hMemDC, &bi,
+            DIB_RGB_COLORS, (void**)&bits,
+            NULL, 0);
+        HBITMAP old_bmp = (HBITMAP) SelectObject(hMemDC, membmp);
+
+        memset(&ci, 0, sizeof(CURSORINFO));
+        ci.cbSize = sizeof(CURSORINFO);
+        cursor_captured = GetCursorInfo(&ci);
+
+        BOOL bRet = ::BitBlt(hMemDC, 0, 0, pStream->m_Width, pStream->m_Height, hDC, 0, 0, SRCCOPY | CAPTUREBLT);
+
+        if (!bRet)
+            continue;
+
+        if (cursor_captured)
+        {
+            drawCursor(&ci, hMemDC);
+        }
+
+        memcpy(pStream->m_bmp, bits, imageSize);
+
+        if (hMemDC)
+        {
+            SelectObject(hMemDC, old_bmp);
+            DeleteDC(hMemDC);
+            DeleteObject(membmp);
+        }
+
+        if (hDC)
+        {
+            DeleteDC(hDC);
+        }
+        //DWORD after = GetTickCount();
+        //char msg[256];
+        //sprintf(msg, "Duration: %ld\n", after - now);
+        //OutputDebugStringA(msg);
+        //now = after;
+    }
+
+    return NOERROR;
+}
+
 // Called when graph is run
 HRESULT CVCamStream::OnThreadCreate()
 {
     m_rtLastTime = 0;
+    m_bStop = FALSE;
+
+    m_hThread = CreateThread(NULL, 0, CapThreadProc, this, 0, NULL);
+
     return NOERROR;
 } // OnThreadCreate
 
+// Called when graph is stop running
+HRESULT CVCamStream::OnThreadDestroy()
+{
+    m_bStop = TRUE;
+
+    if (WaitForSingleObject(m_hThread, 500) == WAIT_TIMEOUT)
+    {
+        TerminateThread(m_hThread, NOERROR);
+    }
+
+    CloseHandle(m_hThread);
+
+    return NOERROR;
+} // OnThreadDestroy
 
 //////////////////////////////////////////////////////////////////////////
 //  IAMStreamConfig
@@ -224,23 +363,47 @@ HRESULT STDMETHODCALLTYPE CVCamStream::GetStreamCaps(int iIndex, AM_MEDIA_TYPE *
 {
     *pmt = CreateMediaType(&m_mt);
     DECLARE_PTR(VIDEOINFOHEADER, pvi, (*pmt)->pbFormat);
+    ZeroMemory(pvi, sizeof(VIDEOINFOHEADER));
 
-    if (iIndex == 0) iIndex = 4;
+    POINT pt;
+    pt.x = 1;
+    pt.y = 1;
+
+    HMONITOR hMonitor = ::MonitorFromPoint(pt, NULL);
+
+    MONITORINFOEX mi;
+    mi.cbSize = sizeof(mi);
+    ::GetMonitorInfo(hMonitor, &mi);
+    std::wstring monitorName = mi.szDevice;
+
+    HDC hDC = ::CreateDC(monitorName.c_str(), monitorName.c_str(), NULL, NULL);
+
+    int w = ::GetSystemMetrics(SM_CXSCREEN);
+    int h = ::GetSystemMetrics(SM_CYSCREEN);
+    int bpp = ::GetDeviceCaps(hDC, BITSPIXEL);
 
     pvi->bmiHeader.biCompression = BI_RGB;
-    pvi->bmiHeader.biBitCount    = 24;
-    pvi->bmiHeader.biSize       = sizeof(BITMAPINFOHEADER);
-    pvi->bmiHeader.biWidth      = 80 * iIndex;
-    pvi->bmiHeader.biHeight     = 60 * iIndex;
-    pvi->bmiHeader.biPlanes     = 1;
-    pvi->bmiHeader.biSizeImage  = GetBitmapSize(&pvi->bmiHeader);
+    pvi->bmiHeader.biBitCount = bpp;
+    pvi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    pvi->bmiHeader.biWidth = w;
+    pvi->bmiHeader.biHeight = h;
+    pvi->bmiHeader.biPlanes = ::GetDeviceCaps(hDC, PLANES);
+    pvi->bmiHeader.biSizeImage = GetBitmapSize(&pvi->bmiHeader);
     pvi->bmiHeader.biClrImportant = 0;
+
+    if (hDC)
+    {
+        DeleteDC(hDC);
+    }
 
     SetRectEmpty(&(pvi->rcSource)); // we want the whole image area rendered.
     SetRectEmpty(&(pvi->rcTarget)); // no particular destination rectangle
 
     (*pmt)->majortype = MEDIATYPE_Video;
-    (*pmt)->subtype = MEDIASUBTYPE_RGB24;
+    if (pvi->bmiHeader.biBitCount == 24)
+        (*pmt)->subtype = MEDIASUBTYPE_RGB24;
+    else if (pvi->bmiHeader.biBitCount == 32)
+        (*pmt)->subtype = MEDIASUBTYPE_RGB32;
     (*pmt)->formattype = FORMAT_VideoInfo;
     (*pmt)->bTemporalCompression = FALSE;
     (*pmt)->bFixedSizeSamples= FALSE;
@@ -251,12 +414,12 @@ HRESULT STDMETHODCALLTYPE CVCamStream::GetStreamCaps(int iIndex, AM_MEDIA_TYPE *
     
     pvscc->guid = FORMAT_VideoInfo;
     pvscc->VideoStandard = AnalogVideo_None;
-    pvscc->InputSize.cx = 640;
-    pvscc->InputSize.cy = 480;
+    pvscc->InputSize.cx = w;
+    pvscc->InputSize.cy = h;
     pvscc->MinCroppingSize.cx = 80;
     pvscc->MinCroppingSize.cy = 60;
-    pvscc->MaxCroppingSize.cx = 640;
-    pvscc->MaxCroppingSize.cy = 480;
+    pvscc->MaxCroppingSize.cx = w;
+    pvscc->MaxCroppingSize.cy = h;
     pvscc->CropGranularityX = 80;
     pvscc->CropGranularityY = 60;
     pvscc->CropAlignX = 0;
@@ -264,18 +427,18 @@ HRESULT STDMETHODCALLTYPE CVCamStream::GetStreamCaps(int iIndex, AM_MEDIA_TYPE *
 
     pvscc->MinOutputSize.cx = 80;
     pvscc->MinOutputSize.cy = 60;
-    pvscc->MaxOutputSize.cx = 640;
-    pvscc->MaxOutputSize.cy = 480;
+    pvscc->MaxOutputSize.cx = w;
+    pvscc->MaxOutputSize.cy = h;
     pvscc->OutputGranularityX = 0;
     pvscc->OutputGranularityY = 0;
     pvscc->StretchTapsX = 0;
     pvscc->StretchTapsY = 0;
     pvscc->ShrinkTapsX = 0;
     pvscc->ShrinkTapsY = 0;
-    pvscc->MinFrameInterval = 200000;   //50 fps
-    pvscc->MaxFrameInterval = 50000000; // 0.2 fps
-    pvscc->MinBitsPerSecond = (80 * 60 * 3 * 8) / 5;
-    pvscc->MaxBitsPerSecond = 640 * 480 * 3 * 8 * 50;
+    pvscc->MinFrameInterval = 333333;   //30 fps
+    pvscc->MaxFrameInterval = 10000000; // 1 fps
+    pvscc->MinBitsPerSecond = 80 * 60 * bpp * 8;
+    pvscc->MaxBitsPerSecond = w * h * bpp * 8 * 30;
 
     return S_OK;
 }
