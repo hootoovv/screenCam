@@ -9,7 +9,9 @@
 #include <streams.h>
 #include <initguid.h>
 #include <dllsetup.h>
+#include "common.h"
 #include "filters.h"
+#include "properties.h"
 
 #pragma comment(lib, "winmm.lib")
 
@@ -17,10 +19,6 @@
 
 STDAPI AMovieSetupRegisterServer( CLSID   clsServer, LPCWSTR szDescription, LPCWSTR szFileName, LPCWSTR szThreadingModel = L"Both", LPCWSTR szServerType     = L"InprocServer32" );
 STDAPI AMovieSetupUnregisterServer( CLSID clsServer );
-
-// {8E14549A-DB61-4309-AFA1-3578E927E933}
-DEFINE_GUID(CLSID_VirtualCam,
-            0x8e14549a, 0xdb61, 0x4309, 0xaf, 0xa1, 0x35, 0x78, 0xe9, 0x27, 0xe9, 0x99);
 
 const AMOVIESETUP_MEDIATYPE AMSMediaTypesVCam = 
 { 
@@ -58,6 +56,13 @@ CFactoryTemplate g_Templates[] =
         CVCam::CreateInstance,
         NULL,
         &AMSFilterVCam
+    },
+    {
+        L"Screen Cam Property Page",
+        &CLSID_VirtualCamProp,
+        CVCamProp::CreateInstance,
+        NULL,
+        NULL
     },
 
 };
@@ -121,12 +126,14 @@ STDAPI RegisterFilters( BOOL bRegister )
 
 STDAPI DllRegisterServer()
 {
-    return RegisterFilters(TRUE);
+	AMovieDllRegisterServer2(TRUE);
+	return RegisterFilters(TRUE);
 }
 
 STDAPI DllUnregisterServer()
 {
-    return RegisterFilters(FALSE);
+	RegisterFilters(FALSE);
+	return AMovieDllRegisterServer2(FALSE);
 }
 
 extern "C" BOOL WINAPI DllEntryPoint(HINSTANCE, ULONG, LPVOID);

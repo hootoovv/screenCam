@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <olectl.h>
 #include <dvdmedia.h>
+#include "common.h"
+#include "properties.h"
 #include "filters.h"
 
 //////////////////////////////////////////////////////////////////////////
@@ -30,12 +32,136 @@ CVCam::CVCam(LPUNKNOWN lpunk, HRESULT *phr) :
 
 HRESULT CVCam::QueryInterface(REFIID riid, void **ppv)
 {
-    //Forward request for IAMStreamConfig & IKsPropertySet to the pin
-    if(riid == _uuidof(IAMStreamConfig) || riid == _uuidof(IKsPropertySet))
+    //Forward request for IAMStreamConfig, IKsPropertySet, ISpecifyPropertyPages & IIScreenCam to the pin
+    if(riid == _uuidof(IAMStreamConfig) || riid == _uuidof(IKsPropertySet) || riid == _uuidof(ISpecifyPropertyPages) || riid == IID_ScreenCam)
         return m_paStreams[0]->QueryInterface(riid, ppv);
     else
         return CSource::QueryInterface(riid, ppv);
 }
+
+static BOOL CALLBACK MonitorEnum(HMONITOR hMon, HDC hdc, LPRECT lprcMonitor, LPARAM pData)
+{
+    CVCamStream* pStream = (CVCamStream*)pData;
+    pStream->m_next->m_hMonitor = hMon;
+    pStream->m_next->m_rect = *lprcMonitor;
+
+    pStream->m_next++;
+
+    return TRUE;
+}
+
+void drawCursor(CURSORINFO* pci, HDC hMemDC)
+{
+    HICON      icon;
+    ICONINFO   ii;
+    POINT      win_pos = { 0, 0 };
+
+    if (!(pci->flags & CURSOR_SHOWING))
+        return;
+
+    icon = CopyIcon(pci->hCursor);
+    if (!icon)
+        return;
+
+    if (GetIconInfo(icon, &ii)) {
+        POINT pos;
+
+        pos.x = pci->ptScreenPos.x - (int)ii.xHotspot - win_pos.x;
+        pos.y = pci->ptScreenPos.y - (int)ii.yHotspot - win_pos.y;
+
+        DrawIconEx(hMemDC, pos.x, pos.y, icon, 0, 0, 0, NULL,
+            DI_NORMAL);
+
+        DeleteObject(ii.hbmColor);
+        DeleteObject(ii.hbmMask);
+    }
+
+    DestroyIcon(icon);
+}
+
+DWORD WINAPI CapThreadProc(LPVOID lpParam)
+{
+    CVCamStream* pStream = (CVCamStream*)lpParam;
+
+    HMONITOR hMonitor = pStream->m_monitors[pStream->m_monitor].m_hMonitor;
+
+    MONITORINFOEX mi;
+    mi.cbSize = sizeof(mi);
+    ::GetMonitorInfo(hMonitor, &mi);
+    std::wstring monitorName = mi.szDevice;
+
+    int imageSize = pStream->m_Width * pStream->m_Height * pStream->m_BPP / 8;
+    BITMAPINFO bi = { 0 };
+    BITMAPINFOHEADER* bih = &bi.bmiHeader;
+    bih->biSize = sizeof(BITMAPINFOHEADER);
+    bih->biBitCount = pStream->m_BPP;
+    bih->biWidth = pStream->m_Width;
+    bih->biHeight = pStream->m_Height;
+    bih->biSizeImage = imageSize;
+    bih->biPlanes = 1;
+    bih->biClrImportant = 0;
+    bih->biClrUsed = 0;
+    bih->biCompression = 0;
+    bih->biXPelsPerMeter = 0;
+    bih->biYPelsPerMeter = 0;
+
+    BYTE* bits;
+    CURSORINFO ci;
+    BOOL cursor_captured = FALSE;
+    //DWORD now = 0;
+
+    while (!pStream->m_bStop)
+    {
+        //now = GetTickCount();
+
+        HDC hDC = ::CreateDC(monitorName.c_str(), monitorName.c_str(), NULL, NULL);
+        HDC hMemDC = CreateCompatibleDC(hDC);
+        HBITMAP membmp = CreateDIBSection(hMemDC, &bi,
+            DIB_RGB_COLORS, (void**)&bits,
+            NULL, 0);
+        HBITMAP old_bmp = (HBITMAP)SelectObject(hMemDC, membmp);
+
+        memset(&ci, 0, sizeof(CURSORINFO));
+        ci.cbSize = sizeof(CURSORINFO);
+        if (pStream->m_captureCursor)
+            cursor_captured = GetCursorInfo(&ci);
+        else
+            cursor_captured = FALSE;
+
+        BOOL bRet = ::BitBlt(hMemDC, 0, 0, pStream->m_Width, pStream->m_Height, hDC, 0, 0, SRCCOPY | CAPTUREBLT);
+
+        if (!bRet)
+            continue;
+
+        if (cursor_captured)
+        {
+            drawCursor(&ci, hMemDC);
+        }
+
+        memcpy(pStream->m_bmp, bits, imageSize);
+
+        if (hMemDC)
+        {
+            SelectObject(hMemDC, old_bmp);
+            DeleteDC(hMemDC);
+            DeleteObject(membmp);
+        }
+
+        if (hDC)
+        {
+            DeleteDC(hDC);
+        }
+
+        //DWORD after = GetTickCount();
+        //char msg[256];
+        //sprintf(msg, "Duration: %ld\n", after - now);
+        //OutputDebugStringA(msg);
+        //now = after;
+    }
+
+    return NOERROR;
+}
+
 
 //////////////////////////////////////////////////////////////////////////
 // CVCamStream is the one and only output pin of CVCam which handles 
@@ -49,6 +175,8 @@ CVCamStream::CVCamStream(HRESULT *phr, CVCam *pParent, LPCWSTR pPinName) :
     int bmpMemSize = m_Width * m_Height * m_BPP / 8;
     m_bmp = new BYTE[bmpMemSize];
     ZeroMemory(m_bmp, bmpMemSize);
+
+    LoadProfile();
 }
 
 CVCamStream::~CVCamStream()
@@ -63,6 +191,10 @@ HRESULT CVCamStream::QueryInterface(REFIID riid, void **ppv)
         *ppv = (IAMStreamConfig*)this;
     else if(riid == _uuidof(IKsPropertySet))
         *ppv = (IKsPropertySet*)this;
+    else if(riid == _uuidof(ISpecifyPropertyPages))
+        *ppv = (ISpecifyPropertyPages*)this;
+    else if(riid == IID_ScreenCam)
+        *ppv = (IIScreenCam*)this;
     else
         return CSourceStream::QueryInterface(riid, ppv);
 
@@ -70,6 +202,20 @@ HRESULT CVCamStream::QueryInterface(REFIID riid, void **ppv)
     return S_OK;
 }
 
+HRESULT CVCamStream::GetPages(CAUUID* pPages)
+{
+    CheckPointer(pPages, E_POINTER);
+
+    pPages->cElems = 1;
+    pPages->pElems = (GUID*)CoTaskMemAlloc(sizeof(GUID));
+    if (pPages->pElems == NULL) {
+        return E_OUTOFMEMORY;
+    }
+
+    *(pPages->pElems) = CLSID_VirtualCamProp;
+    return NOERROR;
+
+}
 
 //////////////////////////////////////////////////////////////////////////
 //  This is the routine where we create the data being output by the Virtual
@@ -119,11 +265,9 @@ HRESULT CVCamStream::SetMediaType(const CMediaType *pmt)
 // See Directshow help topic for IAMStreamConfig for details on this method
 HRESULT CVCamStream::GetMediaType(CMediaType *pmt)
 {
-    POINT pt;
-    pt.x = 1;
-    pt.y = 1;
+    LoadProfile();
 
-    HMONITOR hMonitor = ::MonitorFromPoint(pt, NULL);
+    HMONITOR hMonitor = m_monitors[m_monitor].m_hMonitor;
 
     MONITORINFOEX mi;
     mi.cbSize = sizeof(mi);
@@ -131,9 +275,9 @@ HRESULT CVCamStream::GetMediaType(CMediaType *pmt)
     std::wstring monitorName = mi.szDevice;
 
     HDC hDC = ::CreateDC(monitorName.c_str(), monitorName.c_str(), NULL, NULL);
+    m_Width = m_monitors[m_monitor].m_rect.right - m_monitors[m_monitor].m_rect.left;
+    m_Height = m_monitors[m_monitor].m_rect.bottom - m_monitors[m_monitor].m_rect.top;
 
-    m_Width = ::GetSystemMetrics(SM_CXSCREEN);
-    m_Height = ::GetSystemMetrics(SM_CYSCREEN);
     m_BPP = ::GetDeviceCaps(hDC, BITSPIXEL);
 
     DECLARE_PTR(VIDEOINFOHEADER, pvi, pmt->AllocFormatBuffer(sizeof(VIDEOINFOHEADER)));
@@ -190,118 +334,6 @@ HRESULT CVCamStream::DecideBufferSize(IMemAllocator *pAlloc, ALLOCATOR_PROPERTIE
     return NOERROR;
 } // DecideBufferSize
 
-void drawCursor(CURSORINFO* pci, HDC hMemDC)
-{
-    HICON      icon;
-    ICONINFO   ii;
-    POINT      win_pos = { 0, 0 };
-
-    if (!(pci->flags & CURSOR_SHOWING))
-        return;
-
-    icon = CopyIcon(pci->hCursor);
-    if (!icon)
-        return;
-
-    if (GetIconInfo(icon, &ii)) {
-        POINT pos;
-
-        pos.x = pci->ptScreenPos.x - (int)ii.xHotspot - win_pos.x;
-        pos.y = pci->ptScreenPos.y - (int)ii.yHotspot - win_pos.y;
-
-        DrawIconEx(hMemDC, pos.x, pos.y, icon, 0, 0, 0, NULL,
-            DI_NORMAL);
-
-        DeleteObject(ii.hbmColor);
-        DeleteObject(ii.hbmMask);
-    }
-
-    DestroyIcon(icon);
-}
-
-DWORD WINAPI CapThreadProc(LPVOID lpParam)
-{
-    CVCamStream* pStream = (CVCamStream*) lpParam;
-
-    POINT pt;
-    pt.x = 1;
-    pt.y = 1;
-
-    HMONITOR hMonitor = ::MonitorFromPoint(pt, NULL);
-
-    MONITORINFOEX mi;
-    mi.cbSize = sizeof(mi);
-    ::GetMonitorInfo(hMonitor, &mi);
-    std::wstring monitorName = mi.szDevice;
-
-    int imageSize = pStream->m_Width * pStream->m_Height * pStream->m_BPP / 8;
-    BITMAPINFO bi = { 0 };
-    BITMAPINFOHEADER* bih = &bi.bmiHeader;
-    bih->biSize = sizeof(BITMAPINFOHEADER);
-    bih->biBitCount = pStream->m_BPP;
-    bih->biWidth = pStream->m_Width;
-    bih->biHeight = pStream->m_Height;
-    bih->biSizeImage = imageSize;
-    bih->biPlanes = 1;
-    bih->biClrImportant = 0;
-    bih->biClrUsed = 0;
-    bih->biCompression = 0;
-    bih->biXPelsPerMeter = 0;
-    bih->biYPelsPerMeter = 0;
-
-    BYTE* bits;
-    CURSORINFO ci;
-    BOOL cursor_captured = FALSE;
-    //DWORD now = 0;
-
-    while(!pStream->m_bStop)
-    {
-        //now = GetTickCount();
-        HDC hDC = ::CreateDC(monitorName.c_str(), monitorName.c_str(), NULL, NULL);
-
-        HDC hMemDC = CreateCompatibleDC(hDC);
-        HBITMAP membmp = CreateDIBSection(hMemDC, &bi,
-            DIB_RGB_COLORS, (void**)&bits,
-            NULL, 0);
-        HBITMAP old_bmp = (HBITMAP) SelectObject(hMemDC, membmp);
-
-        memset(&ci, 0, sizeof(CURSORINFO));
-        ci.cbSize = sizeof(CURSORINFO);
-        cursor_captured = GetCursorInfo(&ci);
-
-        BOOL bRet = ::BitBlt(hMemDC, 0, 0, pStream->m_Width, pStream->m_Height, hDC, 0, 0, SRCCOPY | CAPTUREBLT);
-
-        if (!bRet)
-            continue;
-
-        if (cursor_captured)
-        {
-            drawCursor(&ci, hMemDC);
-        }
-
-        memcpy(pStream->m_bmp, bits, imageSize);
-
-        if (hMemDC)
-        {
-            SelectObject(hMemDC, old_bmp);
-            DeleteDC(hMemDC);
-            DeleteObject(membmp);
-        }
-
-        if (hDC)
-        {
-            DeleteDC(hDC);
-        }
-        //DWORD after = GetTickCount();
-        //char msg[256];
-        //sprintf(msg, "Duration: %ld\n", after - now);
-        //OutputDebugStringA(msg);
-        //now = after;
-    }
-
-    return NOERROR;
-}
-
 // Called when graph is run
 HRESULT CVCamStream::OnThreadCreate()
 {
@@ -354,7 +386,7 @@ HRESULT STDMETHODCALLTYPE CVCamStream::GetFormat(AM_MEDIA_TYPE **ppmt)
 
 HRESULT STDMETHODCALLTYPE CVCamStream::GetNumberOfCapabilities(int *piCount, int *piSize)
 {
-    *piCount = 8;
+    *piCount = 1;
     *piSize = sizeof(VIDEO_STREAM_CONFIG_CAPS);
     return S_OK;
 }
@@ -365,11 +397,7 @@ HRESULT STDMETHODCALLTYPE CVCamStream::GetStreamCaps(int iIndex, AM_MEDIA_TYPE *
     DECLARE_PTR(VIDEOINFOHEADER, pvi, (*pmt)->pbFormat);
     ZeroMemory(pvi, sizeof(VIDEOINFOHEADER));
 
-    POINT pt;
-    pt.x = 1;
-    pt.y = 1;
-
-    HMONITOR hMonitor = ::MonitorFromPoint(pt, NULL);
+    HMONITOR hMonitor = m_monitors[m_monitor].m_hMonitor;
 
     MONITORINFOEX mi;
     mi.cbSize = sizeof(mi);
@@ -377,9 +405,9 @@ HRESULT STDMETHODCALLTYPE CVCamStream::GetStreamCaps(int iIndex, AM_MEDIA_TYPE *
     std::wstring monitorName = mi.szDevice;
 
     HDC hDC = ::CreateDC(monitorName.c_str(), monitorName.c_str(), NULL, NULL);
+    int w = m_monitors[m_monitor].m_rect.right - m_monitors[m_monitor].m_rect.left;
+    int h = m_monitors[m_monitor].m_rect.bottom - m_monitors[m_monitor].m_rect.top;
 
-    int w = ::GetSystemMetrics(SM_CXSCREEN);
-    int h = ::GetSystemMetrics(SM_CYSCREEN);
     int bpp = ::GetDeviceCaps(hDC, BITSPIXEL);
 
     pvi->bmiHeader.biCompression = BI_RGB;
@@ -486,3 +514,66 @@ HRESULT CVCamStream::QuerySupported(REFGUID guidPropSet, DWORD dwPropID, DWORD *
     if (pTypeSupport) *pTypeSupport = KSPROPERTY_SUPPORT_GET; 
     return S_OK;
 }
+
+HRESULT CVCamStream::get_IScreenCamParams(int* monitor, BOOL* cursor)
+{
+    CAutoLock cAutolock(&m_camLock);
+    CheckPointer(monitor, E_POINTER);
+    CheckPointer(cursor, E_POINTER);
+
+    *monitor = m_monitor;
+    *cursor = m_captureCursor;
+
+    return NOERROR;
+}
+
+HRESULT CVCamStream::put_IScreenCamParams(int monitor, BOOL cursor)
+{
+    CAutoLock cAutolock(&m_camLock);
+
+    m_monitor = monitor;
+    m_captureCursor = cursor;
+
+    SaveProfile();
+
+    return NOERROR;
+}
+
+void CVCamStream::LoadProfile()
+{
+    char szANSI[STR_MAX_LENGTH];
+
+    ::GetProfileStringA("screenCam", "monitor", "0", szANSI, STR_MAX_LENGTH);
+    m_monitor = atoi(szANSI);
+    
+    ::GetProfileStringA("screenCam", "cursor", "1", szANSI, STR_MAX_LENGTH);
+
+    if (strcmp(szANSI, "0") == 0)
+        m_captureCursor = FALSE;
+    else
+        m_captureCursor = TRUE;
+
+    m_monitorCount = ::GetSystemMetrics(SM_CMONITORS);
+    if (m_monitor > m_monitorCount - 1)
+        m_monitor = 0;
+
+    m_next = &m_monitors[0];
+    EnumDisplayMonitors(0, 0, MonitorEnum, (LPARAM) this);
+}
+
+void CVCamStream::SaveProfile()
+{
+    char szANSI[STR_MAX_LENGTH];
+    sprintf_s(szANSI, "%d", m_monitor);
+
+    ::WriteProfileStringA("screenCam", "monitor", szANSI);
+
+    if (m_captureCursor)
+        strcpy_s(szANSI, "1");
+    else
+        strcpy_s(szANSI, "0");
+
+    ::WriteProfileStringA("screenCam", "cursor", szANSI);
+}
+
+

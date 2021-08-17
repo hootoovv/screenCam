@@ -197,17 +197,25 @@
       <StackReserveSize>2097152</StackReserveSize>
       <StackCommitSize>2097152</StackCommitSize>
       <ModuleDefinitionFile>$(ProjectName).def</ModuleDefinitionFile>
+      <AdditionalDependencies>%(AdditionalDependencies);BaseClasses.lib;shlwapi.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Dll.cpp" />
     <ClCompile Include="Filters.cpp" />
+    <ClCompile Include="Properties.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="Filters.def" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="common.h" />
     <ClInclude Include="Filters.h" />
+    <ClInclude Include="Properties.h" />
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Resource.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

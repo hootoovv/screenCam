@@ -2,8 +2,6 @@
 
 #define DECLARE_PTR(type, ptr, expr) type* ptr = (type*)(expr);
 
-EXTERN_C const GUID CLSID_VirtualCam;
-
 class CVCamStream;
 class CVCam : public CSource
 {
@@ -20,7 +18,12 @@ private:
     CVCam(LPUNKNOWN lpunk, HRESULT *phr);
 };
 
-class CVCamStream : public CSourceStream, public IAMStreamConfig, public IKsPropertySet
+struct MonitorParam {
+    HMONITOR m_hMonitor;
+    RECT     m_rect;
+};
+
+class CVCamStream : public CSourceStream, public IAMStreamConfig, public IKsPropertySet, public ISpecifyPropertyPages, public IIScreenCam
 {
 public:
 
@@ -51,6 +54,9 @@ public:
     HRESULT STDMETHODCALLTYPE Get(REFGUID guidPropSet, DWORD dwPropID, void *pInstanceData,DWORD cbInstanceData, void *pPropData, DWORD cbPropData, DWORD *pcbReturned);
     HRESULT STDMETHODCALLTYPE QuerySupported(REFGUID guidPropSet, DWORD dwPropID, DWORD *pTypeSupport);
     
+    // ISpecifyPropertyPages interface
+    STDMETHODIMP GetPages(CAUUID* pPages);
+
     //////////////////////////////////////////////////////////////////////////
     //  CSourceStream
     //////////////////////////////////////////////////////////////////////////
@@ -64,11 +70,26 @@ public:
     HRESULT OnThreadCreate(void);
     HRESULT OnThreadDestroy(void);
 
-    BOOL m_bStop;
-    int m_Width;
-    int m_Height;
-    int m_BPP;
-    BYTE* m_bmp;
+    // These implement the custom IIScreenCam interface
+    STDMETHODIMP get_IScreenCamParams(int* monitor, BOOL* cursor);
+    STDMETHODIMP put_IScreenCamParams(int monitor, BOOL cursor);
+
+    void LoadProfile();
+    void SaveProfile();
+
+    CCritSec    m_camLock;
+    int		m_monitor;
+    BOOL	m_captureCursor;
+
+    MonitorParam m_monitors[16];
+    int      m_monitorCount;
+    MonitorParam* m_next;
+
+    BOOL    m_bStop;
+    int     m_Width;
+    int     m_Height;
+    int     m_BPP;
+    BYTE*   m_bmp;
     
 private:
     CVCam *m_pParent;
