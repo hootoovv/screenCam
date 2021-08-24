@@ -1,3 +1,8 @@
+# screenCam
+
+This repository is based on Vivek's vCam. It can capture desktop monitor as vCam source. It also adds and property page to config screen selection.
+
+
 # DirectShow VCam
 
 This repository contains [Vivek](https://groups.google.com/g/microsoft.public.win32.programmer.directx.video/c/1beZkSCb0KE/m/5VF366wR3CcJ)'s Capture Source Filter filter, a popular DirectShow sample project, which recently celebrated its 16th anniversary ([2005 posting reference](https://groups.google.com/g/microsoft.public.win32.programmer.directx.video/c/WRuNmZsWj-o/m/-l4sKR_2o-EJ)).
