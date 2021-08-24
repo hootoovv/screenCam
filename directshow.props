@@ -2,7 +2,7 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros" >
-    <DirectShowSamplesDir>D:\Dev\Projects\VC\directshow\baseclasses</DirectShowSamplesDir>
+    <DirectShowSamplesDir>D:\Dev\Projects\VC\screenCam\directshow\baseclasses</DirectShowSamplesDir>
   </PropertyGroup>
   <PropertyGroup />
   <ItemDefinitionGroup>

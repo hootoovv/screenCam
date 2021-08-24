@@ -1,3 +1,6 @@
 *.bak
 /.vs
 /bin
+*.obj
+*.tlog
+*.log
